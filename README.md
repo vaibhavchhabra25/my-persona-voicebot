@@ -1,36 +1,69 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Talk to Vaibhav: a persona voice bot
 
-## Getting Started
+A web app where anyone can ask me interview-style questions **out loud** and hear an answer
+the way I would give it. No sign-in, no API key, works on desktop and mobile.
 
-First, run the development server:
+**Live demo:** _coming soon_
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+## How it works
+
+```
+Browser                                   Server (Next.js route handlers on Vercel)
+───────                                   ─────────────────────────────────────────
+Tap mic → MediaRecorder captures audio ─▶ POST /api/transcribe → Groq Whisper (speech → text)
+Transcript shown, sent as a question   ─▶ POST /api/chat       → Groq Llama + persona prompt
+Answer shown, sent for speech          ─▶ POST /api/speak      → Groq TTS (text → audio)
+Plays audio (or falls back to the browser's built-in voice if server TTS is unavailable)
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+- **Persona:** `src/lib/server/persona.ts` holds the facts about me and the speaking rules.
+  The model must answer in first person, in a spoken style, and only from those facts.
+  It must not invent employers, numbers or achievements.
+- **API key stays on the server.** The browser only talks to this app's own routes.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Design decisions
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| Decision | Why |
+|---|---|
+| Record audio and transcribe on the server, instead of the browser's speech recognition | Browser speech recognition doesn't exist in Firefox and is unreliable on iOS. MediaRecorder + Whisper works the same everywhere. |
+| Groq for STT, LLM and TTS | Free tier, very low latency, which matters for a voice experience. |
+| Browser `speechSynthesis` fallback | If server TTS fails or hits a limit, the bot still speaks. |
+| Typed input + suggested questions | Works even when the mic is blocked or the user is in a quiet place. |
+| Short spoken answers (60–120 words) | Long answers are tiring to listen to. |
 
-## Learn More
+## Reliability and safety
 
-To learn more about Next.js, take a look at the following resources:
+- **Per-IP rate limit** (best effort, per instance) and input-size limits on every route.
+- **Timeouts** on every upstream call; friendly error messages in the UI, never stack traces.
+- **Structured JSON logs** (request id, route, latency, status, question) visible in Vercel logs.
+  IPs are hashed and never logged raw.
+- **iOS audio handling:** audio is unlocked inside the user's tap so replies can auto-play.
+- **Speech watchdog:** the UI never gets stuck in "speaking" if a browser voice never finishes.
+- Prompt-injection and "are you an AI?" handling built into the system prompt.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Run locally
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```bash
+cp .env.example .env.local   # add your GROQ_API_KEY
+npm install
+npm run dev                  # http://localhost:3000
+```
 
-## Deploy on Vercel
+## Deploy
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+1. Import this repo in Vercel (framework: Next.js; no other settings needed).
+2. Add `GROQ_API_KEY` under Project Settings → Environment Variables.
+3. Deploy. Every push to `main` redeploys automatically.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Project structure
+
+```
+src/app/page.tsx                 Landing page
+src/components/VoiceBot.tsx      Mic / conversation UI and state machine
+src/lib/client/audio.ts          Recording format detection, iOS unlock, browser TTS fallback
+src/app/api/{transcribe,chat,speak}/route.ts   Server routes
+src/lib/server/groq.ts           Groq API client (timeouts, configurable models)
+src/lib/server/persona.ts        Persona facts + system prompt
+src/lib/server/guard.ts          Rate limiting, logging, request ids
+persona/QUESTIONNAIRE.md         The questionnaire used to build the persona
+```
