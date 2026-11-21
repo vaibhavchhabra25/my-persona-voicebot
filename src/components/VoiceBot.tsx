@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   browserTtsAvailable,
   extForMime,
+  loadVoices,
   pickRecordingFormat,
   silentWavUrl,
   speakWithBrowser,
@@ -21,6 +22,9 @@ const SUGGESTED = [
 ];
 
 const MAX_RECORDING_MS = 30_000;
+
+/** Set when the server reports its voice quota is used up; module-level so it survives re-renders. */
+let serverVoiceOffUntil = 0;
 const MIN_RECORDING_MS = 600;
 
 const STATUS_LABEL: Record<Status, string> = {
@@ -65,7 +69,7 @@ export default function VoiceBot() {
 
   useEffect(() => {
     // Voices load asynchronously in some browsers; touch the list early.
-    if (browserTtsAvailable()) window.speechSynthesis.getVoices();
+    void loadVoices();
     return () => {
       streamRef.current?.getTracks().forEach((t) => t.stop());
       abortRef.current?.abort();
@@ -104,13 +108,19 @@ export default function VoiceBot() {
     setStatus("speaking");
     const done = () => setStatus((s) => (s === "speaking" ? "idle" : s));
     try {
+      if (Date.now() < serverVoiceOffUntil) throw new Error("server voice paused (quota)");
       const res = await fetch("/api/speak", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text }),
         signal,
       });
-      if (!res.ok) throw new Error("server voice unavailable");
+      if (!res.ok) {
+        const info = (await res.json().catch(() => ({}))) as { upstreamStatus?: number };
+        // Quota exhausted: stop asking the server for a while and use the browser voice.
+        if (info.upstreamStatus === 429) serverVoiceOffUntil = Date.now() + 10 * 60 * 1000;
+        throw new Error("server voice unavailable");
+      }
       const blob = await res.blob();
       if (signal.aborted) return;
       const el = audioRef.current ?? new Audio();
@@ -121,7 +131,7 @@ export default function VoiceBot() {
     } catch (err) {
       if (signal.aborted) return;
       console.warn("Falling back to browser voice:", err);
-      if (browserTtsAvailable()) speakWithBrowser(text, done);
+      if (browserTtsAvailable()) void speakWithBrowser(text, done);
       else done();
     }
   }, []);

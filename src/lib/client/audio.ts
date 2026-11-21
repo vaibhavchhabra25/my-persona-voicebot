@@ -50,20 +50,83 @@ export function browserTtsAvailable(): boolean {
   return typeof window !== "undefined" && "speechSynthesis" in window;
 }
 
-function pickVoice(): SpeechSynthesisVoice | undefined {
-  const voices = window.speechSynthesis.getVoices().filter((v) => v.lang.startsWith("en"));
-  // Prefer male voices to match the bot's persona.
-  const preferred = [/Google UK English Male/i, /Microsoft (Guy|Ravi|David|Mark)/i, /Rishi/i, /Daniel/i, /Alex/i, /Aaron/i];
-  for (const re of preferred) {
-    const match = voices.find((v) => re.test(v.name) || re.test(v.lang));
-    if (match) return match;
-  }
-  return voices[0];
+const MALE_NAMES =
+  /\b(male|guy|andrew|brian|christopher|eric|roger|steffan|ryan|thomas|prabhat|daniel|rishi|aaron|alex|arthur|evan|nathan|tom|david|mark|ravi|liam|william|james|oliver)\b/i;
+const FEMALE_NAMES =
+  /\b(female|aria|jenny|ava|emma|michelle|sonia|libby|neerja|samantha|karen|moira|tessa|victoria|zira|susan|hazel|heera|veena|serena|allison|kate|fiona|catherine|martha|nicky)\b/i;
+// Apple "novelty" voices sound like sound effects; never use them.
+const NOVELTY =
+  /\b(albert|bad news|bahh|bells|boing|bubbles|cellos|good news|jester|organ|superstar|trinoids|whisper|wobble|zarvox|fred|junior|ralph|kathy|princess|deranged|hysterical)\b/i;
+
+/** Score voices: neural/online quality first, then male, then English locale. */
+function scoreVoice(v: SpeechSynthesisVoice): number {
+  if (!v.lang.toLowerCase().startsWith("en") || NOVELTY.test(v.name)) return -1;
+  let score = 0;
+  if (/natural|neural|online/i.test(v.name)) score += 60; // Edge / Windows neural voices
+  if (/premium|enhanced|siri/i.test(v.name)) score += 50; // Apple high-quality voices
+  if (/^google/i.test(v.name)) score += 35; // Chrome network voices
+  if (MALE_NAMES.test(v.name)) score += 25;
+  if (FEMALE_NAMES.test(v.name)) score -= 25;
+  if (/en[-_](US|GB|IN)/i.test(v.lang)) score += 5;
+  return score;
 }
 
-export function speakWithBrowser(text: string, onEnd: () => void): void {
+let cachedVoice: SpeechSynthesisVoice | undefined;
+
+function pickVoice(): SpeechSynthesisVoice | undefined {
+  if (cachedVoice) return cachedVoice;
+  const ranked = window.speechSynthesis
+    .getVoices()
+    .map((v) => ({ v, s: scoreVoice(v) }))
+    .filter((x) => x.s >= 0)
+    .sort((a, b) => b.s - a.s);
+  cachedVoice = ranked[0]?.v;
+  return cachedVoice;
+}
+
+/** Voices load asynchronously in Chrome/Edge; wait briefly for them. */
+export function loadVoices(timeoutMs = 1500): Promise<void> {
+  if (!browserTtsAvailable()) return Promise.resolve();
+  const synth = window.speechSynthesis;
+  if (synth.getVoices().length) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => {
+      synth.removeEventListener("voiceschanged", done);
+      resolve();
+    };
+    synth.addEventListener("voiceschanged", done);
+    setTimeout(done, timeoutMs);
+  });
+}
+
+/**
+ * Split into sentence-sized chunks. Chrome's Google voices silently stop after
+ * ~15 seconds of a single utterance, so long answers must be queued in pieces.
+ */
+function chunkText(text: string, maxLen = 180): string[] {
+  const sentences = text.match(/[^.!?]+[.!?]+["')\]]*|[^.!?]+$/g) ?? [text];
+  const chunks: string[] = [];
+  let cur = "";
+  for (const raw of sentences) {
+    const sentence = raw.trim();
+    if (!sentence) continue;
+    if ((cur + " " + sentence).trim().length > maxLen && cur) {
+      chunks.push(cur);
+      cur = sentence;
+    } else {
+      cur = (cur + " " + sentence).trim();
+    }
+  }
+  if (cur) chunks.push(cur);
+  // Hard-split any chunk that is still too long (very long sentences) on commas/spaces.
+  return chunks.flatMap((c) => (c.length <= maxLen * 1.5 ? [c] : c.match(new RegExp(`.{1,${maxLen}}(\\s|$)`, "g")) ?? [c]));
+}
+
+export async function speakWithBrowser(text: string, onEnd: () => void): Promise<void> {
   const synth = window.speechSynthesis;
   synth.cancel();
+  await loadVoices();
+
   let finished = false;
   const finish = () => {
     if (finished) return;
@@ -77,13 +140,24 @@ export function speakWithBrowser(text: string, onEnd: () => void): void {
   const watchdog = setTimeout(() => {
     synth.cancel();
     finish();
-  }, (words / 2.2) * 1000 + 4000);
+  }, (words / 2.0) * 1000 + 6000);
 
-  const u = new SpeechSynthesisUtterance(text);
   const voice = pickVoice();
-  if (voice) u.voice = voice;
-  u.rate = 1.02;
-  u.onend = finish;
-  u.onerror = finish;
-  synth.speak(u);
+  const chunks = chunkText(text);
+  chunks.forEach((chunk, i) => {
+    const u = new SpeechSynthesisUtterance(chunk);
+    if (voice) {
+      u.voice = voice;
+      u.lang = voice.lang;
+    }
+    u.rate = 1.0;
+    u.pitch = 0.95;
+    if (i === chunks.length - 1) u.onend = finish;
+    u.onerror = (e) => {
+      // "interrupted"/"canceled" happen when the user taps stop; treat as finished.
+      if (e.error !== "interrupted" && e.error !== "canceled") console.warn("speech error", e.error);
+      finish();
+    };
+    synth.speak(u);
+  });
 }
