@@ -23,7 +23,10 @@ export async function GET() {
       (["stt", "chat", "tts"] as const).map((k) => [k, { id: MODELS[k], available: ids.has(MODELS[k]) }]),
     );
     const ok = Object.values(models).every((m) => m.available);
-    return Response.json({ ok, keyConfigured: true, groqStatus: res.status, models }, { status: ok ? 200 : 503 });
+    return Response.json(
+      { ok, keyConfigured: true, groqStatus: res.status, models, availableModels: [...ids].sort() },
+      { status: ok ? 200 : 503 },
+    );
   } catch (err) {
     return Response.json({ ok: false, keyConfigured: true, error: String(err).slice(0, 200) }, { status: 503 });
   }
