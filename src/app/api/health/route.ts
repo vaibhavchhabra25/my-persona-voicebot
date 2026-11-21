@@ -1,4 +1,5 @@
 import { chat, MODELS, speak } from "@/lib/server/groq";
+import { buildSystemPrompt } from "@/lib/server/persona";
 
 /**
  * Health check: reports whether the Groq key is configured and whether the
@@ -18,7 +19,12 @@ async function probe(fn: () => Promise<unknown>) {
 export async function GET(req: Request) {
   if (new URL(req.url).searchParams.get("deep") === "1") {
     const [chatProbe, ttsProbe] = await Promise.all([
-      probe(() => chat([{ role: "user", content: "Say hi in three words." }])),
+      probe(() =>
+        chat([
+          { role: "system", content: buildSystemPrompt() },
+          { role: "user", content: "Say hi in three words." },
+        ]),
+      ),
       probe(() => speak("Hello there.")),
     ]);
     return Response.json({ chat: chatProbe, tts: ttsProbe });
