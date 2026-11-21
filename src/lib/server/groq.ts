@@ -6,7 +6,10 @@ const GROQ_BASE = "https://api.groq.com/openai/v1";
 export const MODELS = {
   stt: process.env.GROQ_STT_MODEL ?? "whisper-large-v3-turbo",
   chat: process.env.GROQ_CHAT_MODEL ?? "openai/gpt-oss-120b",
-  chatFallback: process.env.GROQ_CHAT_FALLBACK_MODEL ?? "openai/gpt-oss-20b",
+  chatFallbacks: (process.env.GROQ_CHAT_FALLBACK_MODELS ?? "openai/gpt-oss-20b,qwen/qwen3.8-27b")
+    .split(",")
+    .map((m) => m.trim())
+    .filter(Boolean),
   tts: process.env.GROQ_TTS_MODEL ?? "canopylabs/orpheus-v1-english",
   ttsVoice: process.env.GROQ_TTS_VOICE ?? "troy",
 };
@@ -26,20 +29,36 @@ function apiKey(): string {
   return key;
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Seconds Groq asks us to wait on a 429, from the header or the error message. */
+function retryAfterSeconds(res: Response, body: string): number | null {
+  const header = Number(res.headers.get("retry-after"));
+  if (Number.isFinite(header) && header > 0) return header;
+  const m = body.match(/try again in ([\d.]+)s/i);
+  return m ? Number(m[1]) : null;
+}
+
+const MAX_RATE_LIMIT_WAIT_S = 8;
+
 async function groqFetch(path: string, init: RequestInit, timeoutMs: number) {
-  const res = await fetch(`${GROQ_BASE}${path}`, {
-    ...init,
-    headers: { Authorization: `Bearer ${apiKey()}`, ...init.headers },
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  if (!res.ok) {
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(`${GROQ_BASE}${path}`, {
+      ...init,
+      headers: { Authorization: `Bearer ${apiKey()}`, ...init.headers },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (res.ok) return res;
     const body = await res.text().catch(() => "");
-    throw new UpstreamError(
-      `Groq ${path} failed: ${res.status} ${body.slice(0, 300)}`,
-      res.status,
-    );
+    // Short per-minute rate limits: wait briefly and retry once instead of failing.
+    const wait = res.status === 429 ? retryAfterSeconds(res, body) : null;
+    if (attempt === 0 && wait !== null && wait <= MAX_RATE_LIMIT_WAIT_S) {
+      console.warn(JSON.stringify({ event: "rate_limited_retry", path, waitS: wait }));
+      await sleep(wait * 1000 + 250);
+      continue;
+    }
+    throw new UpstreamError(`Groq ${path} failed: ${res.status} ${body.slice(0, 300)}`, res.status);
   }
-  return res;
 }
 
 export async function transcribe(audio: Blob, filename: string): Promise<string> {
@@ -67,7 +86,7 @@ async function chatOnce(model: string, messages: ChatMessage[]): Promise<string>
         messages,
         temperature: 0.3,
         // Reasoning models spend tokens thinking before answering; leave headroom.
-        max_tokens: isReasoning ? 1500 : 400,
+        max_tokens: isReasoning ? 900 : 1200,
         ...(isReasoning ? { reasoning_effort: "low" } : {}),
       }),
     },
@@ -84,7 +103,7 @@ async function chatOnce(model: string, messages: ChatMessage[]): Promise<string>
 /** Primary model first; on failure (retired model, outage, empty answer) try the fallback. */
 export async function chat(messages: ChatMessage[]): Promise<{ text: string; model: string }> {
   let lastErr: unknown;
-  for (const model of [MODELS.chat, MODELS.chatFallback]) {
+  for (const model of [MODELS.chat, ...MODELS.chatFallbacks]) {
     try {
       const text = await chatOnce(model, messages);
       if (text) return { text, model };
