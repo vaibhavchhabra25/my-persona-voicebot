@@ -11,7 +11,7 @@ the way I would give it. No sign-in, no API key, works on desktop and mobile.
 Browser                                   Server (Next.js route handlers on Vercel)
 ───────                                   ─────────────────────────────────────────
 Tap mic → MediaRecorder captures audio ─▶ POST /api/transcribe → Groq Whisper (speech → text)
-Transcript shown, sent as a question   ─▶ POST /api/chat       → Groq Llama + persona prompt
+Transcript shown, sent as a question   ─▶ POST /api/chat       → Groq gpt-oss + persona prompt
 Answer shown, sent for speech          ─▶ POST /api/speak      → Groq TTS (text → audio)
 Plays audio (or falls back to the browser's built-in voice if server TTS is unavailable)
 ```
@@ -30,7 +30,7 @@ Plays audio (or falls back to the browser's built-in voice if server TTS is unav
 | Browser `speechSynthesis` fallback | Groq's free TTS quota is small (~3,600 tokens/day). When it runs out, the bot switches to the best voice the browser has (Edge/Windows neural, Google, Apple), ranked automatically, and long answers are chunked to avoid Chrome's ~15s cut-off. |
 | Free tier only | Chat falls back across three Groq models (`gpt-oss-120b` → `gpt-oss-20b` → `qwen3.8-27b`) and retries short rate limits, so per-minute caps rarely surface to users. |
 | Typed input + suggested questions | Works even when the mic is blocked or the user is in a quiet place. |
-| Short spoken answers (60–120 words) | Long answers are tiring to listen to. |
+| Short spoken answers (15–30 seconds) | Long answers are tiring to listen to. |
 
 ## Reliability and safety
 
