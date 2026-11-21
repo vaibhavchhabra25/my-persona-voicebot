@@ -29,6 +29,20 @@ function fixWavHeader(buf: ArrayBuffer): ArrayBuffer {
   return buf;
 }
 
+/**
+ * Circuit breaker: when Groq says the TTS quota is exhausted for a while (e.g. daily
+ * limit), skip server TTS until then so the client falls back to the browser voice
+ * immediately instead of paying for a failed round trip each time. Per instance.
+ */
+let ttsBlockedUntil = 0;
+
+function parseWaitMs(message: string): number {
+  const m = message.match(/try again in (?:(\d+)h)?(?:(\d+)m)?(?:([\d.]+)s)?/i);
+  if (!m) return 0;
+  const [, h, min, sec] = m;
+  return ((Number(h ?? 0) * 60 + Number(min ?? 0)) * 60 + Number(sec ?? 0)) * 1000;
+}
+
 export async function POST(req: Request) {
   const requestId = newRequestId();
   const started = Date.now();
@@ -37,6 +51,9 @@ export async function POST(req: Request) {
   if (process.env.TTS_PROVIDER === "browser") {
     // Server TTS deliberately disabled: client falls back to the browser voice.
     return jsonError("Server voice disabled.", 503, requestId);
+  }
+  if (Date.now() < ttsBlockedUntil) {
+    return Response.json({ error: "Server voice unavailable.", upstreamStatus: 429, requestId }, { status: 503 });
   }
   if (rateLimited(client)) {
     return jsonError("Rate limited.", 429, requestId);
@@ -60,6 +77,10 @@ export async function POST(req: Request) {
     });
   } catch (err) {
     const status = err instanceof UpstreamError ? err.status : 500;
+    if (status === 429) {
+      const waitMs = parseWaitMs(String(err));
+      if (waitMs > 30_000) ttsBlockedUntil = Date.now() + Math.min(waitMs, 60 * 60 * 1000);
+    }
     log({ route: "speak", requestId, client, status, ms: Date.now() - started, error: String(err) });
     // 503 tells the client to fall back to the browser's built-in voice.
     const detail = err instanceof UpstreamError ? (err.message.match(/"code":"([a-z_]+)"/)?.[1] ?? null) : null;
