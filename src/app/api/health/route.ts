@@ -12,7 +12,7 @@ async function probe(fn: () => Promise<unknown>) {
     return { ok: true, ms: Date.now() - started };
   } catch (err) {
     // Upstream error text from Groq (never contains our key).
-    return { ok: false, ms: Date.now() - started, error: String(err).slice(0, 400) };
+    return { ok: false, ms: Date.now() - started, error: String(err).replace(/org_[a-z0-9]+/gi, "org_***").slice(0, 500) };
   }
 }
 
