@@ -1,10 +1,29 @@
-import { MODELS } from "@/lib/server/groq";
+import { chat, MODELS, speak } from "@/lib/server/groq";
 
 /**
  * Health check: reports whether the Groq key is configured and whether the
  * configured models are available. Never returns the key itself.
  */
-export async function GET() {
+async function probe(fn: () => Promise<unknown>) {
+  const started = Date.now();
+  try {
+    await fn();
+    return { ok: true, ms: Date.now() - started };
+  } catch (err) {
+    // Upstream error text from Groq (never contains our key).
+    return { ok: false, ms: Date.now() - started, error: String(err).slice(0, 400) };
+  }
+}
+
+export async function GET(req: Request) {
+  if (new URL(req.url).searchParams.get("deep") === "1") {
+    const [chatProbe, ttsProbe] = await Promise.all([
+      probe(() => chat([{ role: "user", content: "Say hi in three words." }])),
+      probe(() => speak("Hello there.")),
+    ]);
+    return Response.json({ chat: chatProbe, tts: ttsProbe });
+  }
+
   const key = process.env.GROQ_API_KEY;
   if (!key) {
     return Response.json({ ok: false, keyConfigured: false }, { status: 503 });
