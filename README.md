@@ -3,7 +3,7 @@
 A web app where anyone can ask me interview-style questions **out loud** and hear an answer
 the way I would give it. No sign-in, no API key, works on desktop and mobile.
 
-**Live demo:** _coming soon_
+**Live demo:** https://my-persona-voicebot.vercel.app/
 
 ## How it works
 
@@ -27,7 +27,8 @@ Plays audio (or falls back to the browser's built-in voice if server TTS is unav
 |---|---|
 | Record audio and transcribe on the server, instead of the browser's speech recognition | Browser speech recognition doesn't exist in Firefox and is unreliable on iOS. MediaRecorder + Whisper works the same everywhere. |
 | Groq for STT, LLM and TTS | Free tier, very low latency, which matters for a voice experience. |
-| Browser `speechSynthesis` fallback | If server TTS fails or hits a limit, the bot still speaks. |
+| Browser `speechSynthesis` fallback | Groq's free TTS quota is small (~3,600 tokens/day). When it runs out, the bot switches to the best voice the browser has (Edge/Windows neural, Google, Apple), ranked automatically, and long answers are chunked to avoid Chrome's ~15s cut-off. |
+| Free tier only | Chat falls back across three Groq models (`gpt-oss-120b` → `gpt-oss-20b` → `qwen3.8-27b`) and retries short rate limits, so per-minute caps rarely surface to users. |
 | Typed input + suggested questions | Works even when the mic is blocked or the user is in a quiet place. |
 | Short spoken answers (60–120 words) | Long answers are tiring to listen to. |
 
@@ -40,6 +41,8 @@ Plays audio (or falls back to the browser's built-in voice if server TTS is unav
 - **iOS audio handling:** audio is unlocked inside the user's tap so replies can auto-play.
 - **Speech watchdog:** the UI never gets stuck in "speaking" if a browser voice never finishes.
 - Prompt-injection and "are you an AI?" handling built into the system prompt.
+- **Grounding rules:** the bot only states facts from the persona; unknown tools get an honest "haven't used it".
+- **Health check:** `GET /api/health` (config + model availability), `GET /api/health?deep=1` (live chat + TTS probe).
 
 ## Run locally
 
