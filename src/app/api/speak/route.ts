@@ -6,6 +6,29 @@ export const maxDuration = 30;
 // Groq TTS accepts up to ~1200 characters per request.
 const MAX_CHARS = 1200;
 
+/**
+ * Groq streams WAV with placeholder sizes (0xFFFFFFFF), which makes Safari/iOS
+ * report a bogus duration. Patch the RIFF and data chunk sizes to the real length.
+ */
+function fixWavHeader(buf: ArrayBuffer): ArrayBuffer {
+  const v = new DataView(buf);
+  const tag = (o: number) => String.fromCharCode(v.getUint8(o), v.getUint8(o + 1), v.getUint8(o + 2), v.getUint8(o + 3));
+  if (buf.byteLength < 44 || tag(0) !== "RIFF" || tag(8) !== "WAVE") return buf;
+  v.setUint32(4, buf.byteLength - 8, true);
+  let o = 12;
+  while (o + 8 <= buf.byteLength) {
+    const id = tag(o);
+    if (id === "data") {
+      v.setUint32(o + 4, buf.byteLength - o - 8, true);
+      break;
+    }
+    const size = v.getUint32(o + 4, true);
+    if (size === 0xffffffff) break;
+    o += 8 + size + (size % 2);
+  }
+  return buf;
+}
+
 export async function POST(req: Request) {
   const requestId = newRequestId();
   const started = Date.now();
@@ -30,7 +53,7 @@ export async function POST(req: Request) {
   if (text.length > MAX_CHARS) text = text.slice(0, MAX_CHARS);
 
   try {
-    const audio = await speak(text);
+    const audio = fixWavHeader(await speak(text));
     log({ route: "speak", requestId, client, status: 200, ms: Date.now() - started, chars: text.length, bytes: audio.byteLength });
     return new Response(audio, {
       headers: { "Content-Type": "audio/wav", "Cache-Control": "no-store", "X-Request-Id": requestId },
