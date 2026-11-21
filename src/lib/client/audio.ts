@@ -52,7 +52,8 @@ export function browserTtsAvailable(): boolean {
 
 function pickVoice(): SpeechSynthesisVoice | undefined {
   const voices = window.speechSynthesis.getVoices().filter((v) => v.lang.startsWith("en"));
-  const preferred = [/Google US English/i, /Samantha/i, /Microsoft (Guy|Aria|Jenny)/i, /Daniel/i, /en-IN/i];
+  // Prefer male voices to match the bot's persona.
+  const preferred = [/Google UK English Male/i, /Microsoft (Guy|Ravi|David|Mark)/i, /Rishi/i, /Daniel/i, /Alex/i, /Aaron/i];
   for (const re of preferred) {
     const match = voices.find((v) => re.test(v.name) || re.test(v.lang));
     if (match) return match;
