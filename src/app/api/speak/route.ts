@@ -62,6 +62,10 @@ export async function POST(req: Request) {
     const status = err instanceof UpstreamError ? err.status : 500;
     log({ route: "speak", requestId, client, status, ms: Date.now() - started, error: String(err) });
     // 503 tells the client to fall back to the browser's built-in voice.
-    return jsonError("Server voice unavailable.", 503, requestId);
+    const detail = err instanceof UpstreamError ? (err.message.match(/"code":"([a-z_]+)"/)?.[1] ?? null) : null;
+    return Response.json(
+      { error: "Server voice unavailable.", upstreamStatus: status, upstreamCode: detail, requestId },
+      { status: 503 },
+    );
   }
 }
