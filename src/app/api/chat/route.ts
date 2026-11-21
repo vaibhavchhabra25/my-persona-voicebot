@@ -67,6 +67,9 @@ export async function POST(req: Request) {
   } catch (err) {
     const status = err instanceof UpstreamError ? err.status : 500;
     log({ route: "chat", requestId, client, status, ms: Date.now() - started, error: String(err) });
+    if (status === 429) {
+      return jsonError("Lots of people are talking to me right now. Please try again in a minute.", 503, requestId);
+    }
     return jsonError("Sorry, I'm having trouble thinking right now. Please try again in a moment.", 502, requestId);
   }
 }

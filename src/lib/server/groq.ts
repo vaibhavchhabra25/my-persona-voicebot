@@ -65,7 +65,7 @@ async function chatOnce(model: string, messages: ChatMessage[]): Promise<string>
       body: JSON.stringify({
         model,
         messages,
-        temperature: 0.6,
+        temperature: 0.3,
         // Reasoning models spend tokens thinking before answering; leave headroom.
         max_tokens: isReasoning ? 1500 : 400,
         ...(isReasoning ? { reasoning_effort: "low" } : {}),
