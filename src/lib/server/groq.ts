@@ -5,7 +5,8 @@ const GROQ_BASE = "https://api.groq.com/openai/v1";
 // Model names are configurable so we can swap them without a code change.
 export const MODELS = {
   stt: process.env.GROQ_STT_MODEL ?? "whisper-large-v3-turbo",
-  chat: process.env.GROQ_CHAT_MODEL ?? "llama-3.3-70b-versatile",
+  chat: process.env.GROQ_CHAT_MODEL ?? "openai/gpt-oss-120b",
+  chatFallback: process.env.GROQ_CHAT_FALLBACK_MODEL ?? "openai/gpt-oss-20b",
   tts: process.env.GROQ_TTS_MODEL ?? "canopylabs/orpheus-v1-english",
   ttsVoice: process.env.GROQ_TTS_VOICE ?? "troy",
 };
@@ -54,17 +55,20 @@ export async function transcribe(audio: Blob, filename: string): Promise<string>
 
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
-export async function chat(messages: ChatMessage[]): Promise<string> {
+async function chatOnce(model: string, messages: ChatMessage[]): Promise<string> {
+  const isReasoning = model.startsWith("openai/gpt-oss");
   const res = await groqFetch(
     "/chat/completions",
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: MODELS.chat,
+        model,
         messages,
         temperature: 0.6,
-        max_tokens: 350,
+        // Reasoning models spend tokens thinking before answering; leave headroom.
+        max_tokens: isReasoning ? 1500 : 400,
+        ...(isReasoning ? { reasoning_effort: "low" } : {}),
       }),
     },
     25_000,
@@ -72,7 +76,25 @@ export async function chat(messages: ChatMessage[]): Promise<string> {
   const data = (await res.json()) as {
     choices?: { message?: { content?: string } }[];
   };
-  return (data.choices?.[0]?.message?.content ?? "").trim();
+  const raw = data.choices?.[0]?.message?.content ?? "";
+  // Defensive: strip any inline thinking blocks some models emit.
+  return raw.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+}
+
+/** Primary model first; on failure (retired model, outage, empty answer) try the fallback. */
+export async function chat(messages: ChatMessage[]): Promise<{ text: string; model: string }> {
+  let lastErr: unknown;
+  for (const model of [MODELS.chat, MODELS.chatFallback]) {
+    try {
+      const text = await chatOnce(model, messages);
+      if (text) return { text, model };
+      lastErr = new UpstreamError(`Empty reply from ${model}`, 502);
+    } catch (err) {
+      lastErr = err;
+      console.warn(JSON.stringify({ event: "chat_model_failed", model, error: String(err).slice(0, 300) }));
+    }
+  }
+  throw lastErr;
 }
 
 export async function speak(text: string): Promise<ArrayBuffer> {

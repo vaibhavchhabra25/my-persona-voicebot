@@ -52,7 +52,7 @@ export async function POST(req: Request) {
   ];
 
   try {
-    const reply = await chat(messages);
+    const { text: reply, model } = await chat(messages);
     log({
       route: "chat",
       requestId,
@@ -60,6 +60,7 @@ export async function POST(req: Request) {
       status: 200,
       ms: Date.now() - started,
       question: message.slice(0, 200),
+      model,
       replyChars: reply.length,
     });
     return Response.json({ reply, requestId });
